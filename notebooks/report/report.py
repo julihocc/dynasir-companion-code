@@ -90,7 +90,16 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+from pathlib import Path
 import matplotlib.pyplot as plt
+
+try:
+    # Resolve the project root or base directory dynamically
+    BASE_DIR = Path(__file__).resolve().parent
+except NameError:
+    # Fallback/Default for notebook execution (CWD)
+    BASE_DIR = Path.cwd()
+
 import seaborn as sns
 import numpy as np
 
@@ -1058,7 +1067,7 @@ if __name__ == "__main__":
     
     # %% [code]
     evaluation = global_model.evaluate_forecast(
-        global_testing_data, save_evaluation=True, filename="global_evaluation"
+        global_testing_data, save_evaluation=True, filename=str(BASE_DIR / "global_evaluation")
     )
     
     # %% [code]
@@ -1220,17 +1229,21 @@ if __name__ == "__main__":
     
         def export_markdown(self, filename):
             """Exports summary to markdown."""
+            filename = Path(filename)
+            figures_dir = filename.parent / 'model_report_figures'
+            
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(f'# Model Report\n\n')
                 f.write(self.generate_summary())
                 f.write('\n\n## Visualization\n')
+                # Use relative path for the link in the markdown file
                 f.write('![Forecast Panel](model_report_figures/forecast_panel.png)\n')
             
             # Save figure
-            os.makedirs('model_report_figures', exist_ok=True)
+            figures_dir.mkdir(parents=True, exist_ok=True)
             fig = self.plot_forecast_panel()
             if fig:
-                fig.savefig('model_report_figures/forecast_panel.png')
+                fig.savefig(figures_dir / 'forecast_panel.png')
                 plt.close(fig)
     
     
@@ -1271,7 +1284,7 @@ if __name__ == "__main__":
         print(f'Warning: Could not plot forecast panel: {e}')
     
     # Export Report
-    output_filename = 'model_report.md'
+    output_filename = BASE_DIR / 'model_report.md'
     print(f'Exporting report to {output_filename}...')
     report.export_markdown(output_filename)
     print('Report generation complete.')

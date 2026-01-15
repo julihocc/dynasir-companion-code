@@ -109,12 +109,14 @@ def py_to_ipynb(py_path, ipynb_path):
     print("Conversion complete.")
 
 if __name__ == "__main__":
-    # Hardcoded paths as per requirement/context, but could be arguments
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    PY_FILE = os.path.join(PROJECT_ROOT, "src", "notebooks", "report", "report.py")
-    IPYNB_FILE = os.path.join(PROJECT_ROOT, "src", "notebooks", "report", "report.ipynb")
+    from pathlib import Path
     
-    if os.path.exists(PY_FILE):
-        py_to_ipynb(PY_FILE, IPYNB_FILE)
+    # Hardcoded paths as per requirement/context, but could be arguments
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    PY_FILE = PROJECT_ROOT / "src" / "notebooks" / "report" / "report.py"
+    IPYNB_FILE = PROJECT_ROOT / "src" / "notebooks" / "report" / "report.ipynb"
+    
+    if PY_FILE.exists():
+        py_to_ipynb(str(PY_FILE), str(IPYNB_FILE))
     else:
         print(f"Error: Source file {PY_FILE} not found.")

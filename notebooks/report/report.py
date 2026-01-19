@@ -58,7 +58,7 @@
 # C(t+1)-C(t) =  \alpha(t) \dfrac{S(t)I(t)}{S(t)+I(t)}
 # $$
 # 
-# For simplicity, we assume a fixed total population $N$ over time, including deceased individuals.
+# We utilize the time-varying population data provided by OWID, denoted as $N(t)$, to account for demographic changes over the course of the pandemic.
 # 
 # From the discrete model above, parameter extraction becomes a direct calculation:
 # $$
@@ -215,6 +215,55 @@ if __name__ == "__main__":
     
     # %% [code]
     global_dataframe = process_data_from_owid(include_vaccination=True)
+    
+    # %% [markdown]
+    # To address the limitation of fixed population data in the standard dataset, we fetch the comprehensive historical population dataset from OWID. We filter it for the "World" entity and interpolate the yearly data to a daily frequency, ensuring that our model reflects the actual demographic changes during the pandemic.
+    
+    # %% [code]
+    try:
+        print("Fetching historical population data...")
+        pop_df = pd.read_csv('https://ourworldindata.org/grapher/population.csv')
+        
+        # Filter for World (OWID_WRL) and valid years (e.g., > 2000) to avoid datetime errors with BCE dates
+        world_pop = pop_df[(pop_df['Entity'] == 'World') & (pop_df['Year'] > 2000)].copy()
+        
+        # Create a date index from the Year column (assuming Jan 1st for each year)
+        world_pop['date'] = pd.to_datetime(world_pop['Year'].astype(str) + '-01-01')
+        world_pop = world_pop.set_index('date').sort_index()
+        
+        # Rename column to match what we need
+        world_pop = world_pop.rename(columns={'Population (historical)': 'N'})
+        
+        # We need to reindex this to match our global_dataframe's daily index
+        # First, ensure we cover the full range
+        start_date = global_dataframe.index.min()
+        end_date = global_dataframe.index.max()
+        
+        # Reindex to daily and interpolate
+        # We use 'time' method interpolation which accounts for the distance between dates
+        daily_pop = world_pop['N'].resample('D').interpolate(method='time')
+        
+        # Align with global_dataframe
+        # We take the intersection of dates
+        common_dates = global_dataframe.index.intersection(daily_pop.index)
+        
+        if len(common_dates) > 0:
+            print("Successfully interpolated population data.")
+            print(f"Interpolated data covers {len(common_dates)} days.")
+            # Update the population column in global_dataframe (N column)
+            # Ensure we only update matching indices
+            global_dataframe.loc[common_dates, 'N'] = daily_pop.loc[common_dates]
+            
+            # Verify the variance
+            n_unique = global_dataframe['N'].nunique()
+            print(f"Population column (N) now has {n_unique} unique values.")
+        else:
+            print("Warning: No overlapping dates found between population data and COVID data.")
+            
+    except Exception as e:
+        print(f"Warning: Could not fetch or process detailed population data: {e}")
+        print("Falling back to static population from process_data_from_owid.")
+
     global_dataframe.head()
     
     # %% [markdown]
@@ -269,7 +318,7 @@ if __name__ == "__main__":
         "N": {
             "color": "#4ECDC4",
             "label": "Total Population",
-            "description": "Global population (fixed over time)",
+            "description": "Total population (time-varying)",
             "fill_alpha": 0.05,
         },
     }
@@ -299,20 +348,19 @@ if __name__ == "__main__":
         )
     
         # Add trend line (moving average) for smoothing
-        if metric != "N":  # Population is constant, no need for trend
-            window_size = min(30, len(data) // 10)  # Adaptive window size
-            if window_size > 1:
-                trend = data.rolling(window=window_size, center=True).mean()
-                ax.plot(
-                    trend.index,
-                    trend.values,
-                    color=info["color"],
-                    linewidth=2,
-                    alpha=0.6,
-                    linestyle="--",
-                    label=f'{info["label"]} (trend)',
-                    zorder=2,
-                )
+        window_size = min(30, len(data) // 10)  # Adaptive window size
+        if window_size > 1:
+            trend = data.rolling(window=window_size, center=True).mean()
+            ax.plot(
+                trend.index,
+                trend.values,
+                color=info["color"],
+                linewidth=2,
+                alpha=0.6,
+                linestyle="--",
+                label=f'{info["label"]} (trend)',
+                zorder=2,
+            )
     
         # Enhanced title and labels
         ax.set_title(
@@ -334,41 +382,51 @@ if __name__ == "__main__":
             fontsize=10,
         )
     
-        # Scientific notation for large numbers
-        ax.ticklabel_format(style="scientific", axis="y", scilimits=(0, 0))
+        # Scientific notation for large numbers, but custom for N
+        if metric == "N":
+             # Force tight layout for population to show the growth
+             y_min, y_max = data.min(), data.max()
+             padding = (y_max - y_min) * 0.1
+             if padding == 0: padding = 1.0
+             
+             ax.set_ylim(y_min - padding, y_max + padding)
+             # Use offset to highlight the variation (e.g. +7.8e9)
+             ax.ticklabel_format(axis="y", style="plain", useOffset=True)
+             # Basic formatter might be better if plain fails to show offset clearly
+        else:
+             ax.ticklabel_format(style="scientific", axis="y", scilimits=(0, 0))
     
-        # Add statistical annotations for non-constant metrics
-        if metric != "N":
-            # Calculate key statistics
-            max_val = data.max()
-            max_date = data.idxmax()
-            final_val = data.iloc[-1]
+        # Add statistical annotations
+        # Calculate key statistics
+        max_val = data.max()
+        max_date = data.idxmax()
+        final_val = data.iloc[-1]
     
-            # Add annotation for peak/current value
-            if metric == "C":
-                ax.annotate(
-                    f"Current: {final_val:.2e}",
-                    xy=(data.index[-1], final_val),
-                    xytext=(10, 10),
-                    textcoords="offset points",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor=info["color"], alpha=0.7),
-                    arrowprops=dict(arrowstyle="->", color=info["color"]),
-                    fontsize=9,
-                    color="white",
-                    fontweight="bold",
-                )
-            elif metric == "D":
-                ax.annotate(
-                    f"Total: {final_val:.2e}",
-                    xy=(data.index[-1], final_val),
-                    xytext=(10, 10),
-                    textcoords="offset points",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor=info["color"], alpha=0.8),
-                    arrowprops=dict(arrowstyle="->", color=info["color"]),
-                    fontsize=9,
-                    color="white",
-                    fontweight="bold",
-                )
+        # Add annotation for peak/current value
+        if metric == "C":
+            ax.annotate(
+                f"Current: {final_val:.2e}",
+                xy=(data.index[-1], final_val),
+                xytext=(10, 10),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor=info["color"], alpha=0.7),
+                arrowprops=dict(arrowstyle="->", color=info["color"]),
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
+        elif metric == "D":
+            ax.annotate(
+                f"Total: {final_val:.2e}",
+                xy=(data.index[-1], final_val),
+                xytext=(10, 10),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor=info["color"], alpha=0.8),
+                arrowprops=dict(arrowstyle="->", color=info["color"]),
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
     
         # Enhanced time axis formatting
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
@@ -402,15 +460,12 @@ if __name__ == "__main__":
         info = metric_info[metric]
         print(f"\n{info['label'].upper()}:")
         print(f"   Description: {info['description']}")
-        if metric != "N":  # Population is constant
-            print(f"   Current Value: {data.iloc[-1]:,.0f}")
-            print(f"   Maximum Value: {data.max():,.0f}")
-            print(f"   Date of Maximum: {data.idxmax().strftime('%Y-%m-%d')}")
-            if len(data) > 1:
-                growth = ((data.iloc[-1] / data.iloc[0]) - 1) * 100
-                print(f"   Total Growth: {growth:,.1f}%")
-        else:
-            print(f"   Value: {data.iloc[-1]:,.0f} (constant)")
+        print(f"   Current Value: {data.iloc[-1]:,.0f}")
+        print(f"   Maximum Value: {data.max():,.0f}")
+        print(f"   Date of Maximum: {data.idxmax().strftime('%Y-%m-%d')}")
+        if len(data) > 1:
+            growth = ((data.iloc[-1] / data.iloc[0]) - 1) * 100
+            print(f"   Total Growth: {growth:,.1f}%")
     print("=" * 70)
     
     # %% [markdown]

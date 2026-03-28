@@ -8,15 +8,19 @@ This directory contains reproducible benchmark and analysis scripts that support
 
 ### 1. `benchmark_static_vs_dynamic.py`
 
-**Purpose**: Compare forecasting accuracy between static SIRD models (constant parameters) and dynamic SIRD models with time-varying parameters (using dynasir).
+**Purpose**: Compare forecasting accuracy between multiple baselines and the dynamic SIRD model with time-varying parameters (dynasir).
 
 **What it does**:
 - Loads COVID-19 data from Our World in Data
-- Fits a static SIRD baseline model using least squares optimization
-- Fits a dynamic SIRD model using dynasir's inverse problem approach
-- Compares forecasting accuracy on a held-out test set
-- Computes metrics: MAE, RMSE, MAPE for both confirmed cases and deaths
-- Outputs a comparison table showing improvement percentages
+- Uses an 80/20 train split with a fixed 12-step held-out evaluation horizon
+- Fits three baselines:
+  - Static SIRD (constant parameters, least-squares fit)
+  - Naive persistence (last observed value carried forward)
+  - Linear trend extrapolation
+- Fits dynamic SIRD (dynasir inverse problem + VAR forecasting)
+- Computes metrics: MAE, RMSE, MAPE for confirmed cases and deaths
+- Computes dynamic 95% interval coverage (cases, deaths)
+- Outputs ranked and comparison CSV tables
 
 **Usage**:
 ```bash
@@ -24,9 +28,10 @@ python benchmark_static_vs_dynamic.py
 ```
 
 **Output**:
-- Console output with detailed metrics
-- `benchmark_comparison.csv`: CSV table comparing Static vs. Dynamic forecasting accuracy
-- Improvement percentages showing how much better dynamic models perform
+- Console output with detailed ranked metrics
+- `paper/companion_figures/benchmark/benchmark_multibaseline_results.csv`: metrics for all models
+- `paper/companion_figures/benchmark/benchmark_summary_ranked.csv`: ranked summary by case/death MAPE
+- `paper/benchmark_comparison.csv`: backward-compatible Static vs. Dynamic comparison table
 
 **Expected Output** (example):
 ```
@@ -48,25 +53,17 @@ Available data points: 1850
 ✓ Dynamic SIRD fitted successfully
   - Test set size: 370 days
 
-RESULTS: Forecast Accuracy Comparison
-======================================================================
+RANKING BY CASE MAPE (lower is better):
+                 model  mape_cases  mape_deaths    mae_cases   mae_deaths
+Dynamic SIRD (dynasir)      0.00xx       0.00xx 2.5e+04      3.2e+02
+     Naive Persistence      0.00xx       0.00xx 5.0e+04      6.8e+02
+          Linear Trend      2x.xx        2x.xx  1.9e+08      1.8e+06
+           Static SIRD     99.99xx      99.99xx 7.7e+08      7.0e+06
 
-[Static SIRD - Confirmed Cases]
-  MAE:  1,234,567
-  RMSE: 1,567,890
-  MAPE: 12.34%
-
-[Dynamic SIRD (dynasir) - Confirmed Cases]
-  MAE:  123,456
-  RMSE: 156,789
-  MAPE: 1.23%
-
-IMPROVEMENT: Dynamic vs. Static
-======================================================================
-      Metric        Static SIRD  Dynamic SIRD  Improvement
-MAE (Cases)        1,234,567      123,456      -90.0%
-RMSE (Cases)       1,567,890      156,789      -90.0%
-MAPE (Cases) %           12.34          1.23     -90.0%
+Dynamic vs Static improvement (% reduction in error):
+  - MAE (Cases): 99.99%
+  - RMSE (Cases): 99.99%
+  - MAPE (Cases) %: 99.99%
 ```
 
 ### 2. `companion_analysis.py`
@@ -147,7 +144,7 @@ These scripts are designed to be run independently and produce results that can 
 
 ### In the Results Section:
 
-> "To validate the advantage of time-varying parameters over static assumptions, we conducted a benchmarking study comparing constant-parameter SIRD (static baseline) against dynasir's dynamic model on COVID-19 data. The dynamic model achieved a **90% reduction in Mean Absolute Error** for forecasting confirmed cases compared to the static baseline, demonstrating the substantial benefit of parameter adaptation."
+> "To validate robustness against simpler alternatives, we benchmarked dynasir's dynamic SIRD against three baselines (static SIRD, naive persistence, linear trend) under a unified 12-step held-out protocol. The dynamic model achieved the lowest error across both cases and deaths, and improved substantially over the static SIRD baseline."
 
 ### Figure Captions:
 

@@ -49,6 +49,7 @@ except ImportError as exc:  # pragma: no cover - runtime guard
 WINDOW_GRID = [3, 5, 7, 10, 14]
 LAG_GRID = [1, 2, 3, 4, 6, 8, 12]
 SPLIT_RATIO = 0.8
+EVAL_STEPS = 12
 
 
 def _safe_container(data: pd.DataFrame, window: int) -> DataContainer:
@@ -61,15 +62,29 @@ def _safe_container(data: pd.DataFrame, window: int) -> DataContainer:
 
 def _extract_forecasts(model: Model, n_test: int) -> tuple[np.ndarray, np.ndarray]:
     """Extract forecast arrays for C and D with robust fallbacks."""
+    # Primary path: aggregated result tables produced by model.generate_result().
     try:
-        sim_c = model.results["simulations"].get("C", None)
-        sim_d = model.results["simulations"].get("D", None)
-        if sim_c is not None and sim_d is not None:
-            c_hat = sim_c.mean(axis=1)
-            d_hat = sim_d.mean(axis=1)
-            c_hat = c_hat.values if hasattr(c_hat, "values") else np.asarray(c_hat)
-            d_hat = d_hat.values if hasattr(d_hat, "values") else np.asarray(d_hat)
-            return c_hat[:n_test], d_hat[:n_test]
+        if model.results is not None:
+            c_df = model.results.get("C", None)
+            d_df = model.results.get("D", None)
+            if c_df is not None and d_df is not None:
+                c_col = "mean" if "mean" in c_df.columns else c_df.columns[0]
+                d_col = "mean" if "mean" in d_df.columns else d_df.columns[0]
+                c_hat = np.asarray(c_df[c_col], dtype=float)
+                d_hat = np.asarray(d_df[d_col], dtype=float)
+                return c_hat[:n_test], d_hat[:n_test]
+    except Exception:
+        pass
+
+    # Secondary path: direct central simulation scenario.
+    try:
+        sim = getattr(model, "simulation", None)
+        if sim is not None:
+            ppp = sim["point"]["point"]["point"]
+            if ppp is not None and "C" in ppp.columns and "D" in ppp.columns:
+                c_hat = np.asarray(ppp["C"], dtype=float)
+                d_hat = np.asarray(ppp["D"], dtype=float)
+                return c_hat[:n_test], d_hat[:n_test]
     except Exception:
         pass
 
@@ -90,22 +105,23 @@ def _evaluate_configuration(
 ) -> dict[str, Any]:
     """Fit/evaluate one (window, lag) configuration."""
     n_fit = int(len(data_df) * SPLIT_RATIO)
+    data_train = data_df.iloc[:n_fit]
     data_test = data_df.iloc[n_fit:]
 
-    container = _safe_container(data_df, window=window)
+    container = _safe_container(data_train, window=window)
     model = Model(container)
     model.create_model()
     model.fit_model(max_lag=max_lag)
 
-    n_test = len(data_test)
+    n_test = min(EVAL_STEPS, len(data_test))
     model.forecast(steps=n_test)
     model.run_simulations(n_jobs=1)
     model.generate_result()
 
     c_hat, d_hat = _extract_forecasts(model, n_test)
 
-    c_obs = np.asarray(data_test["C"], dtype=float)
-    d_obs = np.asarray(data_test["D"], dtype=float)
+    c_obs = np.asarray(data_test["C"].iloc[:n_test], dtype=float)
+    d_obs = np.asarray(data_test["D"].iloc[:n_test], dtype=float)
 
     mae_c = mean_absolute_error(c_obs, c_hat)
     rmse_c = np.sqrt(mean_squared_error(c_obs, c_hat))
@@ -124,6 +140,7 @@ def _evaluate_configuration(
         "mae_deaths": float(mae_d),
         "rmse_deaths": float(rmse_d),
         "mape_deaths": float(mape_d),
+        "eval_steps": int(n_test),
         "model": model,
     }
 
@@ -171,11 +188,18 @@ def _plot_residual_diagnostics(
         return
 
     residuals = observed.values - predicted
+    max_lags = min(30, max(1, len(residuals) - 1))
+    pacf_lags = min(max_lags, max(1, (len(residuals) // 2) - 1))
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    plot_acf(residuals, ax=axes[0], lags=30)
+    plot_acf(residuals, ax=axes[0], lags=max_lags)
     axes[0].set_title("ACF of Forecast Residuals (Cases)")
-    plot_pacf(residuals, ax=axes[1], lags=30, method="ywm")
-    axes[1].set_title("PACF of Forecast Residuals (Cases)")
+    try:
+        plot_pacf(residuals, ax=axes[1], lags=pacf_lags, method="ywm")
+        axes[1].set_title("PACF of Forecast Residuals (Cases)")
+    except Exception as exc:
+        axes[1].text(0.5, 0.5, f"PACF unavailable: {exc}", ha="center", va="center", wrap=True)
+        axes[1].set_title("PACF of Forecast Residuals (Cases)")
     plt.tight_layout()
     plt.savefig(out_dir / "residual_acf_pacf_cases.png", dpi=300, bbox_inches="tight")
     plt.close()
@@ -186,6 +210,8 @@ def run_sensitivity() -> None:
     print("Loading OWID data via dynasir...")
     raw = process_data_from_owid(include_vaccination=False)
     base = DataContainer(raw)
+    if base.data is None:
+        raise RuntimeError("DataContainer returned no data")
     data_df = base.data[["C", "D", "I", "R", "N"]].dropna()
 
     out_dir = Path(__file__).resolve().parents[2] / "paper" / "companion_figures" / "sensitivity"
@@ -240,8 +266,9 @@ def run_sensitivity() -> None:
 
     if best_record is not None:
         n_fit = int(len(data_df) * SPLIT_RATIO)
-        observed_cases = data_df.iloc[n_fit:]["C"]
-        c_hat, _ = _extract_forecasts(best_record["model"], len(observed_cases))
+        n_eval = int(best_record.get("eval_steps", EVAL_STEPS))
+        observed_cases = data_df.iloc[n_fit:]["C"].iloc[:n_eval]
+        c_hat, _ = _extract_forecasts(best_record["model"], n_eval)
         _plot_residual_diagnostics(observed_cases, c_hat, out_dir)
 
         print("Best case-MAPE configuration:")

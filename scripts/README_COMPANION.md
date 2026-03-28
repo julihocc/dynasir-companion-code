@@ -95,6 +95,34 @@ python companion_analysis.py
   - `03_compartments.png`
   - `04_parameter_drift.png`
 
+### 3. `sensitivity_diagnostics.py`
+
+**Purpose**: Quantify robustness of the hybrid pipeline to preprocessing and model-order choices.
+
+**What it does**:
+- Runs a grid over Savitzky-Golay window sizes and VAR maximum lag values
+- Computes MAE, RMSE, and MAPE for confirmed cases and deaths
+- Writes summary CSV tables for manuscript reporting
+- Produces publication-ready diagnostics:
+  - Heatmap of case MAPE across window/lag grid
+  - Lag tradeoff plot (cases vs. deaths)
+  - Residual ACF/PACF for best configuration
+
+**Usage**:
+```bash
+python sensitivity_diagnostics.py
+```
+
+**Output**:
+- Directory: `paper/companion_figures/sensitivity/`
+- Files:
+  - `sensitivity_full_grid_results.csv`
+  - `sensitivity_window_results.csv`
+  - `sensitivity_lag_results.csv`
+  - `sensitivity_window_heatmap_mape_cases.png`
+  - `sensitivity_lag_tradeoff.png`
+  - `residual_acf_pacf_cases.png`
+
 ## Requirements
 
 ```
@@ -105,11 +133,12 @@ matplotlib
 seaborn
 scipy
 scikit-learn
+statsmodels
 ```
 
 Install with:
 ```bash
-pip install dynasir numpy pandas matplotlib seaborn scipy scikit-learn
+pip install dynasir numpy pandas matplotlib seaborn scipy scikit-learn statsmodels
 ```
 
 ## Integration with Paper
@@ -182,6 +211,6 @@ Reduce simulation complexity by:
 ## Contact
 
 For questions or issues, refer to the paper or dynasir documentation:
-- Paper: [Paper DOI/URL]
+- Paper: DOI/URL to be added after journal acceptance
 - dynasir: https://github.com/julihocc/dynasir
 - Author: Juliho David Castillo Colmenares (julihocc@tec.mx)

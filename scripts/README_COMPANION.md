@@ -1,8 +1,8 @@
-# Companion Analysis Scripts for "Hybrid Epidemic Intelligence" Paper
+# Companion Analysis Scripts for the Dynamic-Parameter SIRD Paper
 
 This directory contains reproducible benchmark and analysis scripts that support the empirical claims made in the paper:
 
-> **"Hybrid Epidemic Intelligence: Integrating Time-Varying Parameter Estimation with Mechanistic SIRD Models"**
+> **"Dynamic-Parameter SIRD Forecasting: Reproducible Time-Varying Rate Estimation for COVID-19"**
 
 ## Scripts
 
@@ -13,10 +13,11 @@ This directory contains reproducible benchmark and analysis scripts that support
 **What it does**:
 - Loads COVID-19 data from Our World in Data
 - Uses an 80/20 train split with a fixed 12-step held-out evaluation horizon
-- Fits three baselines:
+- Fits four baselines:
   - Static SIRD (constant parameters, least-squares fit)
   - Naive persistence (last observed value carried forward)
   - Linear trend extrapolation
+  - ARIMA incidence (AIC-selected ARIMA models on daily increments)
 - Fits dynamic SIRD (dynasir inverse problem + VAR forecasting)
 - Computes metrics: MAE, RMSE, MAPE for confirmed cases and deaths
 - Computes dynamic 95% interval coverage (cases, deaths)
@@ -35,7 +36,7 @@ python benchmark_static_vs_dynamic.py
 
 **Expected Output** (example):
 ```
-BENCHMARK: Static SIRD vs. Dynamic SIRD (Time-Varying Parameters)
+BENCHMARK: Multi-Baseline Comparison for Dynamic SIRD
 ======================================================================
 
 [1/4] Loading COVID-19 data from Our World in Data...
@@ -57,6 +58,7 @@ RANKING BY CASE MAPE (lower is better):
                  model  mape_cases  mape_deaths    mae_cases   mae_deaths
 Dynamic SIRD (dynasir)      0.00xx       0.00xx 2.5e+04      3.2e+02
      Naive Persistence      0.00xx       0.00xx 5.0e+04      6.8e+02
+       ARIMA Incidence      0.01xx       0.00xx 1.4e+05      4.6e+02
           Linear Trend      2x.xx        2x.xx  1.9e+08      1.8e+06
            Static SIRD     99.99xx      99.99xx 7.7e+08      7.0e+06
 
@@ -144,7 +146,7 @@ These scripts are designed to be run independently and produce results that can 
 
 ### In the Results Section:
 
-> "To validate robustness against simpler alternatives, we benchmarked dynasir's dynamic SIRD against three baselines (static SIRD, naive persistence, linear trend) under a unified 12-step held-out protocol. The dynamic model achieved the lowest error across both cases and deaths, and improved substantially over the static SIRD baseline."
+> "To validate robustness against simpler alternatives, we benchmarked dynasir's dynamic SIRD against static SIRD, naive persistence, ARIMA incidence, and linear-trend baselines under a unified 12-step held-out protocol. The dynamic model achieved the lowest error across both cases and deaths; naive persistence was the strongest case baseline and ARIMA incidence was the strongest death baseline."
 
 ### Figure Captions:
 
@@ -154,7 +156,7 @@ Figure 5 caption:
 ### Table References:
 
 Table 2 caption:
-> "Comparison of forecasting accuracy: static SIRD model with constant parameters vs. dynamic SIRD with time-varying parameters. The dynamic model substantially outperforms the baseline across all error metrics, demonstrating that parameter adaptation is critical for accurate epidemic forecasting."
+> "Comparison of forecasting accuracy across dynamic SIRD, static SIRD, naive persistence, ARIMA incidence, and linear-trend baselines under the same 12-step held-out protocol."
 
 ## Reproducibility
 
@@ -181,10 +183,9 @@ If you use these scripts in your research, cite the paper:
 
 ```bibtex
 @article{castillo2025hybrid,
-  title={Hybrid Epidemic Intelligence: Integrating Time-Varying Parameter Estimation 
-         with Mechanistic SIRD Models},
+  title={Dynamic-Parameter SIRD Forecasting: Reproducible Time-Varying Rate Estimation for COVID-19},
   author={Castillo Colmenares, Juliho David},
-  year={2025}
+  year={2026}
 }
 ```
 

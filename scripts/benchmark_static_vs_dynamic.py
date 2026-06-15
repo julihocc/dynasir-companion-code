@@ -1,11 +1,12 @@
 """
-Benchmarking Script: Multi-Baseline Comparison for Hybrid Dynamic SIRD.
+Benchmarking Script: Multi-Baseline Comparison for Dynamic SIRD.
 
-Compares four forecasting approaches on the same held-out split:
+Compares five forecasting approaches on the same held-out split:
 1. Static SIRD (constant parameters)
 2. Naive persistence baseline
 3. Linear trend extrapolation baseline
-4. Dynamic SIRD (dynasir)
+4. ARIMA incidence baseline
+5. Dynamic SIRD (dynasir)
 
 Outputs:
 - benchmark_multibaseline_results.csv
@@ -21,6 +22,11 @@ import pandas as pd
 from scipy.integrate import odeint
 from scipy.optimize import minimize
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+try:
+    from statsmodels.tsa.arima.model import ARIMA
+except ImportError:
+    ARIMA = None
 
 warnings.filterwarnings("ignore")
 
@@ -287,6 +293,78 @@ def fit_linear_trend(
     }
 
 
+def _fit_best_arima_incidence(increments: np.ndarray):
+    if ARIMA is None:
+        raise RuntimeError("statsmodels is required for ARIMA Incidence")
+
+    increments = np.asarray(increments, dtype=float).reshape(-1)
+    increments = increments[np.isfinite(increments)]
+    if len(increments) < 10:
+        raise RuntimeError("not enough finite increments for ARIMA fitting")
+
+    best_fit = None
+    best_order = None
+    best_aic = np.inf
+
+    for p in range(4):
+        for q in range(4):
+            order = (p, 0, q)
+            try:
+                fit = ARIMA(
+                    increments,
+                    order=order,
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                ).fit()
+                if np.isfinite(fit.aic) and fit.aic < best_aic:
+                    best_fit = fit
+                    best_order = order
+                    best_aic = float(fit.aic)
+            except Exception:
+                continue
+
+    if best_fit is None or best_order is None:
+        raise RuntimeError("all ARIMA orders failed")
+    return best_fit, best_order, best_aic
+
+
+def _forecast_arima_cumulative(train_cumulative: pd.Series, steps: int) -> tuple[np.ndarray, tuple[int, int, int], float]:
+    cumulative = train_cumulative.astype(float).to_numpy()
+    increments = np.diff(cumulative)
+    increments = np.maximum(np.nan_to_num(increments, nan=0.0, posinf=0.0, neginf=0.0), 0.0)
+
+    fit, order, aic = _fit_best_arima_incidence(increments)
+    increment_forecast = np.asarray(fit.forecast(steps=steps), dtype=float).reshape(-1)
+    increment_forecast = np.nan_to_num(increment_forecast, nan=0.0, posinf=0.0, neginf=0.0)
+    increment_forecast = np.maximum(increment_forecast, 0.0)
+    cumulative_forecast = cumulative[-1] + np.cumsum(increment_forecast)
+    return cumulative_forecast, order, aic
+
+
+def fit_arima_incidence(
+    data_df: pd.DataFrame, split_ratio: float = 0.8, eval_steps: int = 12
+) -> dict:
+    n_train = int(len(data_df) * split_ratio)
+    train = data_df.iloc[:n_train].copy()
+    test = data_df.iloc[n_train:n_train + eval_steps].copy()
+
+    c_pred, c_order, c_aic = _forecast_arima_cumulative(train["C"], len(test))
+    d_pred, d_order, d_aic = _forecast_arima_cumulative(train["D"], len(test))
+
+    return {
+        "name": "ARIMA Incidence",
+        "train": train,
+        "test": test,
+        "pred": {"C": c_pred, "D": d_pred},
+        "params": {
+            "cases_order": str(c_order),
+            "cases_aic": c_aic,
+            "deaths_order": str(d_order),
+            "deaths_aic": d_aic,
+        },
+    }
+
+
 def fit_dynamic_sird(
     data_df: pd.DataFrame,
     split_ratio: float = 0.8,
@@ -377,7 +455,7 @@ def calc_improvement(reference: float, candidate: float) -> float:
 
 def main():
     print("=" * 78)
-    print("BENCHMARK: Multi-Baseline Comparison for Hybrid Dynamic SIRD")
+    print("BENCHMARK: Multi-Baseline Comparison for Dynamic SIRD")
     print("=" * 78)
 
     print("\n[1/5] Loading COVID-19 data from Our World in Data...")
@@ -397,18 +475,29 @@ def main():
     static_res = fit_static_sird(data_fit, split_ratio=0.8, eval_steps=eval_steps)
     naive_res = fit_naive_persistence(data_fit, split_ratio=0.8, eval_steps=eval_steps)
     trend_res = fit_linear_trend(data_fit, split_ratio=0.8, eval_steps=eval_steps)
+    arima_res = None
+    try:
+        arima_res = fit_arima_incidence(data_fit, split_ratio=0.8, eval_steps=eval_steps)
+    except Exception as exc:
+        print(f"  - ARIMA Incidence: failed ({exc})")
     print("  - Static SIRD: done")
     print("  - Naive persistence: done")
     print("  - Linear trend: done")
+    if arima_res is not None:
+        print(
+            "  - ARIMA Incidence: done "
+            f"(cases {arima_res['params']['cases_order']}, deaths {arima_res['params']['deaths_order']})"
+        )
 
     print("\n[4/5] Fitting dynamic model (dynasir)...")
     dynamic_res = fit_dynamic_sird(data_fit, split_ratio=0.8, max_lag=3, eval_steps=eval_steps)
+    baseline_results = [res for res in [naive_res, arima_res, trend_res, static_res] if res is not None]
     if dynamic_res is None:
         print("  - Dynamic SIRD failed; reporting baselines only")
-        all_results = [static_res, naive_res, trend_res]
+        all_results = baseline_results
     else:
         print("  - Dynamic SIRD: done")
-        all_results = [naive_res, trend_res, static_res, dynamic_res]
+        all_results = baseline_results + [dynamic_res]
 
     print("\n[5/5] Building ranked summary...")
     results_df = build_results_table(all_results)

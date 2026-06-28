@@ -152,8 +152,23 @@ def fig_rates(full: pd.DataFrame, n_fit: int) -> None:
 
 
 def fig_forecast(core: pd.DataFrame, n_fit: int) -> None:
-    """Fig 4: 12-step forecast vs actual for C, D, I with prediction bands."""
-    print("Figure 4: forecasting analysis (12-step held-out)...")
+    """Fig 4: 12-step held-out forecast vs actual, on DAILY INCIDENCE.
+
+    Plotting incidence (rather than cumulative compartments) matches the
+    paper's primary metric (Table 1 reports incident MAPE) and the Methods
+    argument that cumulative totals are nearly stationary over a 12-day
+    horizon. It also removes the constant ~10k level offset that arises when
+    the smoothed/inverted boundary reconstruction of the cumulative series is
+    compared against the raw observed endpoint -- an offset that dominates the
+    near-flat cumulative band but cancels under first differencing.
+
+    Incident new cases (DeltaC) and new deaths (DeltaD) are first differences
+    of the cumulative forecast/actual trajectories over the horizon (so the
+    degenerate boundary increment, which mixes the reconstructed level with the
+    observed anchor, is excluded). Active infections (I) are a prevalence and
+    are shown at level.
+    """
+    print("Figure 4: forecasting analysis (12-step held-out, daily incidence)...")
     train = core.iloc[:n_fit].copy()
     test = core.iloc[n_fit:n_fit + EVAL_STEPS].copy()
 
@@ -165,47 +180,51 @@ def fig_forecast(core: pd.DataFrame, n_fit: int) -> None:
     model.run_simulations(n_jobs=1)
     model.generate_result()
 
-    comp_info = {
-        "C": ("#E53E3E", "Confirmed Cases"),
-        "D": ("#2D3748", "Deaths"),
-        "I": ("#D69E2E", "Infected"),
-    }
+    # (compartment, colour, panel title, y-label, is_incident)
+    panels = [
+        ("C", "#E53E3E", "New Confirmed Cases", "New cases (count / day)", True),
+        ("D", "#2D3748", "New Deaths", "New deaths (count / day)", True),
+        ("I", "#D69E2E", "Active Infected", "Active infected (count)", False),
+    ]
 
     fig, axes = plt.subplots(1, 3, figsize=(24, 8))
     fig.suptitle(
-        "COVID-19 Forecasting Analysis: 12-Step Held-Out Predictions vs. Actual Data",
+        "COVID-19 12-Step Held-Out Forecast vs. Actual Data (daily incidence)",
         fontsize=20, fontweight="bold", y=0.98,
     )
 
-    for idx, comp in enumerate(["C", "D", "I"]):
+    for idx, (comp, color, title, ylabel, is_incident) in enumerate(panels):
         ax = axes[idx]
-        color, name = comp_info[comp]
 
         ensemble = np.asarray(model.results[comp].values, dtype=float)  # (12, n_scen)
         fc_dates = model.results[comp].index
+        actual = test[comp].to_numpy()
+
+        if is_incident:
+            ensemble = np.diff(ensemble, axis=0)   # (11, n_scen) daily increments
+            actual = np.diff(actual)               # (11,)
+            dates = fc_dates[1:]
+        else:
+            dates = fc_dates
+
         y_min = np.nanmin(ensemble, axis=1)
         y_max = np.nanmax(ensemble, axis=1)
         y_q25 = np.nanpercentile(ensemble, 25, axis=1)
         y_q75 = np.nanpercentile(ensemble, 75, axis=1)
         y_mean = np.nanmean(ensemble, axis=1)
 
-        actual = test[comp]
-
-        ax.fill_between(fc_dates, y_min, y_max, color=color, alpha=0.15,
-                        label=f"{name} Forecast Range", zorder=1)
-        ax.fill_between(fc_dates, y_q25, y_q75, color=color, alpha=0.30,
-                        label=f"{name} IQR (25-75%)", zorder=2)
-        ax.plot(fc_dates, y_mean, color=color, linewidth=3.0, linestyle="--",
-                label=f"{name} Mean Forecast", zorder=3)
-        ax.plot(actual.index, actual.values, color="#1A202C", linewidth=3.5,
+        ax.fill_between(dates, y_min, y_max, color=color, alpha=0.15,
+                        label="Forecast Range", zorder=1)
+        ax.fill_between(dates, y_q25, y_q75, color=color, alpha=0.30,
+                        label="IQR (25-75%)", zorder=2)
+        ax.plot(dates, y_mean, color=color, linewidth=3.0, linestyle="--",
+                label="Mean Forecast", zorder=3)
+        ax.plot(dates, actual, color="#1A202C", linewidth=3.5,
                 marker="o", markersize=5, markerfacecolor="white",
-                markeredgecolor="#1A202C", label=f"Actual {name}", zorder=5)
+                markeredgecolor="#1A202C", label="Actual", zorder=5)
 
-        ax.axvline(fc_dates[0], color="#ED8936", linestyle="--", linewidth=2.5,
-                   alpha=0.9, label="Forecast Start", zorder=4)
-
-        ax.set_title(f"{name} - 12-Step Forecast", fontsize=15, fontweight="bold")
-        ax.set_ylabel(f"{name} (count)", fontsize=13, fontweight="bold")
+        ax.set_title(f"{title} - 12-Step Forecast", fontsize=15, fontweight="bold")
+        ax.set_ylabel(ylabel, fontsize=13, fontweight="bold")
         ax.set_xlabel("Date", fontsize=13, fontweight="bold")
         ax.grid(True, alpha=0.3)
         ax.legend(loc="best", fontsize=9)

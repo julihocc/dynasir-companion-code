@@ -415,7 +415,32 @@ def fit_dynamic_sird(
 # Reporting
 # ---------------------------------------------------------------------------
 
-def build_results_table(results: list[dict]) -> pd.DataFrame:
+def _incident_metrics(res: dict, incidence_df: pd.DataFrame | None) -> dict[str, float]:
+    """Daily-incidence (new-count) MAE/MAPE, as reported in the main results
+    table. The actual increments are dynasir's smoothed dC/dD feature columns;
+    the forecast increments are first differences of the cumulative forecast
+    anchored at the last observed training value (so the first horizon step is
+    forecast[0] - last_train_value). Falls back to differencing the observed
+    cumulative series if the dC/dD columns are unavailable."""
+    test = res["test"]
+    train = res["train"]
+    out: dict[str, float] = {}
+    for comp, dcol, suffix in [("C", "dC", "cases"), ("D", "dD", "deaths")]:
+        pred = np.asarray(res["pred"][comp], dtype=float)[: len(test)]
+        anchor = float(train[comp].iloc[-1])
+        inc_pred = np.diff(np.concatenate([[anchor], pred]))
+        if incidence_df is not None and dcol in incidence_df.columns:
+            inc_true = incidence_df.loc[test.index, dcol].to_numpy(dtype=float)
+        else:
+            inc_true = np.diff(np.concatenate([[anchor], test[comp].to_numpy(dtype=float)]))
+        out[f"mae_incident_{suffix}"] = float(mean_absolute_error(inc_true, inc_pred))
+        out[f"mape_incident_{suffix}"] = _safe_mape(inc_true, inc_pred)
+    return out
+
+
+def build_results_table(
+    results: list[dict], incidence_df: pd.DataFrame | None = None
+) -> pd.DataFrame:
     rows = []
 
     for res in results:
@@ -428,20 +453,20 @@ def build_results_table(results: list[dict]) -> pd.DataFrame:
         c_metrics = _compute_metrics(c_true, c_pred)
         d_metrics = _compute_metrics(d_true, d_pred)
 
-        rows.append(
-            {
-                "model": res["name"],
-                "horizon_days": len(test),
-                "mae_cases": c_metrics["mae"],
-                "rmse_cases": c_metrics["rmse"],
-                "mape_cases": c_metrics["mape"],
-                "mae_deaths": d_metrics["mae"],
-                "rmse_deaths": d_metrics["rmse"],
-                "mape_deaths": d_metrics["mape"],
-                "coverage_cases_95": (res.get("coverage") or {}).get("cases_95"),
-                "coverage_deaths_95": (res.get("coverage") or {}).get("deaths_95"),
-            }
-        )
+        row = {
+            "model": res["name"],
+            "horizon_days": len(test),
+            "mae_cases": c_metrics["mae"],
+            "rmse_cases": c_metrics["rmse"],
+            "mape_cases": c_metrics["mape"],
+            "mae_deaths": d_metrics["mae"],
+            "rmse_deaths": d_metrics["rmse"],
+            "mape_deaths": d_metrics["mape"],
+        }
+        row.update(_incident_metrics(res, incidence_df))
+        row["coverage_cases_95"] = (res.get("coverage") or {}).get("cases_95")
+        row["coverage_deaths_95"] = (res.get("coverage") or {}).get("deaths_95")
+        rows.append(row)
 
     df = pd.DataFrame(rows)
     return df
@@ -500,7 +525,7 @@ def main():
         all_results = baseline_results + [dynamic_res]
 
     print("\n[5/5] Building ranked summary...")
-    results_df = build_results_table(all_results)
+    results_df = build_results_table(all_results, incidence_df=container.data)
 
     ranked = results_df.sort_values(by=["mape_cases", "mape_deaths"], ascending=[True, True]).reset_index(drop=True)
 
@@ -524,39 +549,25 @@ def main():
         st = results_df[results_df["model"] == "Static SIRD"].iloc[0]
         dy = results_df[results_df["model"] == "Dynamic SIRD (dynasir)"].iloc[0]
 
+        metric_keys = [
+            ("MAE (Cases)", "mae_cases"),
+            ("RMSE (Cases)", "rmse_cases"),
+            ("MAPE (Cases) %", "mape_cases"),
+            ("MAE (Deaths)", "mae_deaths"),
+            ("RMSE (Deaths)", "rmse_deaths"),
+            ("MAPE (Deaths) %", "mape_deaths"),
+            ("MAE Incident Cases", "mae_incident_cases"),
+            ("MAPE Incident Cases %", "mape_incident_cases"),
+            ("MAE Incident Deaths", "mae_incident_deaths"),
+            ("MAPE Incident Deaths %", "mape_incident_deaths"),
+        ]
         comparison_df = pd.DataFrame(
             {
-                "Metric": [
-                    "MAE (Cases)",
-                    "RMSE (Cases)",
-                    "MAPE (Cases) %",
-                    "MAE (Deaths)",
-                    "RMSE (Deaths)",
-                    "MAPE (Deaths) %",
-                ],
-                "Static SIRD": [
-                    st["mae_cases"],
-                    st["rmse_cases"],
-                    st["mape_cases"],
-                    st["mae_deaths"],
-                    st["rmse_deaths"],
-                    st["mape_deaths"],
-                ],
-                "Dynamic SIRD": [
-                    dy["mae_cases"],
-                    dy["rmse_cases"],
-                    dy["mape_cases"],
-                    dy["mae_deaths"],
-                    dy["rmse_deaths"],
-                    dy["mape_deaths"],
-                ],
+                "Metric": [label for label, _ in metric_keys],
+                "Static SIRD": [st[key] for _, key in metric_keys],
+                "Dynamic SIRD": [dy[key] for _, key in metric_keys],
                 "Improvement": [
-                    calc_improvement(st["mae_cases"], dy["mae_cases"]),
-                    calc_improvement(st["rmse_cases"], dy["rmse_cases"]),
-                    calc_improvement(st["mape_cases"], dy["mape_cases"]),
-                    calc_improvement(st["mae_deaths"], dy["mae_deaths"]),
-                    calc_improvement(st["rmse_deaths"], dy["rmse_deaths"]),
-                    calc_improvement(st["mape_deaths"], dy["mape_deaths"]),
+                    calc_improvement(st[key], dy[key]) for _, key in metric_keys
                 ],
             }
         )

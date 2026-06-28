@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.integrate import odeint
-from scipy.optimize import minimize
+from scipy.optimize import differential_evolution, minimize
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 try:
@@ -202,38 +202,50 @@ def fit_static_sird(
     train = data_df.iloc[:n_train].copy()
     test = data_df.iloc[n_train:n_train + eval_steps].copy()
 
+    # Onset initial conditions for fitting the training trajectory
     population = float(train["N"].iloc[0])
     i0 = float(train["I"].iloc[0])
     r0 = float(train["R"].iloc[0])
     d0 = float(train["D"].iloc[0])
     s0 = float(population - i0 - r0 - d0)
+    c_obs = train["C"].to_numpy()
+    d_obs = train["D"].to_numpy()
 
     def objective(params):
         beta, gamma, mu = params
-        if any(p <= 0 or p >= 1 for p in params):
-            return 1e12
         try:
-            _, i_pred, r_pred, d_pred = simulate_static_sird(
+            _, i_sim, r_sim, d_sim = simulate_static_sird(
                 s0, i0, r0, d0, population, beta, gamma, mu, len(train)
             )
-            c_pred = i_pred + r_pred + d_pred
-            return float(
-                np.sum((c_pred - train["C"].to_numpy()) ** 2)
-                + np.sum((d_pred - train["D"].to_numpy()) ** 2)
-            )
+            c_sim = i_sim + r_sim + d_sim
+            return float(np.sum((c_sim - c_obs) ** 2) + np.sum((d_sim - d_obs) ** 2))
         except Exception:
-            return 1e12
+            return 1e18
 
-    result = minimize(objective, x0=[0.5, 0.1, 0.01], method="Nelder-Mead", options={"maxiter": 5000})
+    # Global, seeded optimizer: same result regardless of Python/scipy version
+    bounds = [(1e-4, 0.999)] * 3
+    result = differential_evolution(
+        objective, bounds, seed=0, maxiter=1000, tol=1e-9,
+        popsize=10, mutation=(0.5, 1.0), recombination=0.7, workers=1,
+    )
     beta_fit, gamma_fit, mu_fit = result.x
 
-    _, i_all, r_all, d_all = simulate_static_sird(
-        s0, i0, r0, d0, population, beta_fit, gamma_fit, mu_fit, len(data_df)
-    )
-    c_all = i_all + r_all + d_all
+    # Project forward from training endpoint state (as stated in the Methods)
+    pop_e = float(train["N"].iloc[-1])
+    i_e = float(train["I"].iloc[-1])
+    r_e = float(train["R"].iloc[-1])
+    d_e = float(train["D"].iloc[-1])
+    s_e = float(pop_e - i_e - r_e - d_e)
 
-    c_pred = c_all[n_train:n_train + len(test)]
-    d_pred = d_all[n_train:n_train + len(test)]
+    _, i_proj, r_proj, d_proj = simulate_static_sird(
+        s_e, i_e, r_e, d_e, pop_e, beta_fit, gamma_fit, mu_fit, len(test) + 1
+    )
+    c_proj = i_proj + r_proj + d_proj
+    # Anchor cumulative series at observed training endpoint to ensure continuity
+    c_anchor = float(train["C"].iloc[-1])
+    d_anchor = float(train["D"].iloc[-1])
+    c_pred = c_anchor + (c_proj[1:] - c_proj[0])
+    d_pred = d_anchor + (d_proj[1:] - d_proj[0])
 
     return {
         "name": "Static SIRD",

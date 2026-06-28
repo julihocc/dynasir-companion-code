@@ -36,12 +36,9 @@ data/
 output/
 results/
 
-# Generated figures (keep source, ignore rendered output)
+# Generated figure directories (individual files tracked via Git LFS)
 figures/
-*.png
-*.pdf
-*.svg
-*.eps
+output/
 
 # IDE & editor
 .vscode/

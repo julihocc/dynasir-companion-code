@@ -46,29 +46,18 @@ def generate_companion_analysis():
     
     print(f"Data: {len(data_train)} training, {len(data_test)} testing")
     
-    # Fit dynamic model with dynasir
-    print("Fitting dynamic SIRD model...")
-    try:
-        container = DataContainer(data_full)
-        model = Model(container)
-        model.create_model()
-        model.fit_model(max_lag=3)
-        model.forecast(steps=len(data_test))
-        model.run_simulations(n_jobs=1)
-        model.generate_result()
-    except Exception as e:
-        print(f"Error: {e}")
-        return
-    
-    # Extract time-varying parameters
+    # Extract the time-varying parameters recovered by algebraic inversion.
+    # The DataContainer exposes alpha/beta/gamma directly; align them to the
+    # SIRD-ready (dropna) index used for the descriptive figures.
     print("Extracting parameter trajectories...")
-    try:
-        alpha_t = model.features_df['alpha'].values
-        beta_t = model.features_df['beta'].values
-        gamma_t = model.features_df['gamma'].values
-    except:
-        print("Could not extract parameters")
+    rates_full = container.data.reindex(data_full.index)
+    missing = [c for c in ("alpha", "beta", "gamma") if c not in rates_full.columns]
+    if missing:
+        print(f"Could not extract parameters: missing {missing}")
         return
+    alpha_t = rates_full["alpha"].values
+    beta_t = rates_full["beta"].values
+    gamma_t = rates_full["gamma"].values
     
     # Create figures directory
     figures_dir = Path(__file__).parent.parent.parent / 'paper' / 'companion_figures'
@@ -155,13 +144,17 @@ def generate_companion_analysis():
         (2, 'R', 'Recovered', 'green'),
         (3, 'D', 'Deceased', 'black'),
     ]
-    
+
+    # Susceptible (S) is not part of the SIRD-ready frame above, so source all
+    # four compartments from the full container aligned to the same index.
+    comp_full = container.data.reindex(data_full.index)
+
     for idx, (comp_idx, col, name, color) in enumerate(compartments):
-        if col not in data_full.columns:
+        if col not in comp_full.columns:
             continue
-        
+
         ax = axes[idx // 2, idx % 2]
-        data_comp = data_full[col]
+        data_comp = comp_full[col]
         
         ax.plot(dates, data_comp, color=color, linewidth=2.5, alpha=0.8)
         ax.axvline(train_dates[-1], color='red', linestyle='--', linewidth=2, alpha=0.5)
@@ -170,9 +163,10 @@ def generate_companion_analysis():
         
         ax.set_title(f'{name} Compartment', fontsize=12, fontweight='bold')
         ax.set_ylabel('Count', fontsize=11)
+        ax.set_xlabel('Date', fontsize=11)
+        ax.tick_params(axis='x', rotation=45)
         ax.grid(True, alpha=0.3)
-    
-    axes[1, 1].axis('off')
+
     plt.tight_layout()
     plt.savefig(figures_dir / '03_compartments.png', dpi=300, bbox_inches='tight')
     print(f"✓ Saved: 03_compartments.png")
